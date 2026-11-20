@@ -1,0 +1,6 @@
+{
+  "name": "FidelDocs",
+  "description": "Bilingual Amharic and English document inspector and converter between PDF, Word (.docx), and Excel (.xlsx).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
