@@ -1,4 +1,5 @@
-import { useRef, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { onAuthStateChanged, type User } from 'firebase/auth';
 import {
   AlertCircle,
   ArrowRight,
@@ -16,6 +17,18 @@ import type {
 } from '../shared/types.ts';
 import { FormatMatrixSection } from './components/FormatMatrixSection.tsx';
 import { InspectionPreview } from './components/InspectionPreview.tsx';
+import { SavedHistoryPanel } from './components/SavedHistoryPanel.tsx';
+import {
+  auth,
+  deleteConversionFromFirestore,
+  ensureUserProfile,
+  recordToDocumentModel,
+  saveConversionToFirestore,
+  signInWithGoogle,
+  signOutUser,
+  subscribeUserConversions,
+  type SavedConversionRecord,
+} from './firebase.ts';
 import { formatBytes, formatLabel, UI_COPY, type UiLang } from './i18n.ts';
 
 function inferSourceFormat(fileName: string): FileFormat | null {
@@ -62,6 +75,13 @@ export default function App() {
   const [lang, setLang] = useState<UiLang>('am');
   const t = UI_COPY[lang];
 
+  // Firebase Auth & Firestore state
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [savedRecords, setSavedRecords] = useState<SavedConversionRecord[]>([]);
+  const [activeRecordId, setActiveRecordId] = useState<string | null>(null);
+  const [isSavingToFirebase, setIsSavingToFirebase] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [detectedSource, setDetectedSource] = useState<FileFormat | null>(null);
@@ -79,6 +99,36 @@ export default function App() {
 
   const [inspectedDoc, setInspectedDoc] = useState<DocumentModel | null>(null);
   const [availableTargets, setAvailableTargets] = useState<FileFormat[]>([]);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser);
+      setAuthReady(true);
+      if (firebaseUser) {
+        void ensureUserProfile(firebaseUser.uid, firebaseUser.displayName, lang).catch((err) => {
+          console.error('Failed to sync profile:', err);
+        });
+      } else {
+        setSavedRecords([]);
+        setActiveRecordId(null);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!authReady || !user) return;
+    const unsub = subscribeUserConversions(
+      user.uid,
+      (records) => {
+        setSavedRecords(records);
+      },
+      (err) => {
+        setErrorMessage(err.message);
+      }
+    );
+    return () => unsub();
+  }, [authReady, user]);
 
   const handleFileSelect = (file: File) => {
     setErrorMessage(null);
@@ -98,6 +148,7 @@ export default function App() {
     setTargetFormat(validTargets[0]);
     setInspectedDoc(null);
     setAvailableTargets([]);
+    setActiveRecordId(null);
   };
 
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
@@ -168,6 +219,15 @@ export default function App() {
       setTargetFormat(effectiveTarget);
       setStatusMessage(t.autoConvertedNote);
 
+      if (user) {
+        try {
+          const savedId = await saveConversionToFirestore(user.uid, payload.document, null);
+          setActiveRecordId(savedId);
+        } catch (saveErr) {
+          console.error('Auto-save to Firestore failed:', saveErr);
+        }
+      }
+
       if (autoDownload && effectiveTarget) {
         await exportDocumentToFormat(payload.document, effectiveTarget);
       }
@@ -187,6 +247,7 @@ export default function App() {
     setErrorMessage(null);
     setStatusMessage(null);
     setIsInspecting(true);
+    setActiveRecordId(null);
 
     try {
       const res = await fetch(`/api/sample/${format}`);
@@ -218,10 +279,77 @@ export default function App() {
     setDetectedSource(null);
     setInspectedDoc(null);
     setAvailableTargets([]);
+    setActiveRecordId(null);
     setErrorMessage(null);
     setStatusMessage(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setErrorMessage(null);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Google sign-in failed.');
+    }
+  };
+
+  const handleSignOut = async () => {
+    setErrorMessage(null);
+    try {
+      await signOutUser();
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Sign-out failed.');
+    }
+  };
+
+  const handleSaveCurrentToFirebase = async () => {
+    if (!user || !inspectedDoc) return;
+    setIsSavingToFirebase(true);
+    setErrorMessage(null);
+    try {
+      const savedId = await saveConversionToFirestore(user.uid, inspectedDoc, activeRecordId);
+      setActiveRecordId(savedId);
+      setStatusMessage(
+        lang === 'am' ? 'ሰነዱ በፋይርቤዝ ውስጥ ተቀምጧል።' : 'Saved to your Firebase account.'
+      );
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to save document.');
+    } finally {
+      setIsSavingToFirebase(false);
+    }
+  };
+
+  const handleSelectSavedRecord = (rec: SavedConversionRecord) => {
+    const model = recordToDocumentModel(rec);
+    setInspectedDoc(model);
+    setDetectedSource(rec.sourceFormat);
+    const targets = getTargetsForSource(rec.sourceFormat);
+    setAvailableTargets(targets);
+    setTargetFormat(targets[0]);
+    setSelectedFile(null);
+    setActiveRecordId(rec.id);
+    setErrorMessage(null);
+    setStatusMessage(
+      lang === 'am'
+        ? 'ከፋይርቤዝ ማህደር ተከፍቷል — ወዲያውኑ ማውረድ ይችላሉ።'
+        : 'Loaded from Firebase history — ready to export.'
+    );
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDeleteSavedRecord = async (id: string) => {
+    if (!user) return;
+    setErrorMessage(null);
+    try {
+      await deleteConversionFromFirestore(user.uid, id);
+      if (activeRecordId === id) {
+        setActiveRecordId(null);
+      }
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to delete saved record.');
     }
   };
 
@@ -246,6 +374,12 @@ export default function App() {
               className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
             >
               {t.navConverter}
+            </a>
+            <a
+              href="#history"
+              className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
+            >
+              {lang === 'am' ? 'ማህደር' : 'History'}
             </a>
             <a
               href="#matrix"
@@ -283,7 +417,6 @@ export default function App() {
             <p className="text-sm sm:text-base text-slate-600 leading-relaxed">{t.heroSubtitle}</p>
           </div>
 
-          {/* Segmented Language Switch inside Workspace Toolbar */}
           <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-lg self-start lg:self-end shrink-0">
             <button
               type="button"
@@ -325,7 +458,7 @@ export default function App() {
             className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-start gap-3 text-sm text-red-900"
           >
             <AlertCircle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
-            <div>
+            <div className="break-words">
               <span className="font-semibold">{t.errorPrefix} </span>
               <span>{errorMessage}</span>
             </div>
@@ -338,7 +471,7 @@ export default function App() {
           <section className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-5 space-y-5">
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-slate-900">{t.sourcePanelTitle}</h2>
-              {selectedFile && (
+              {(selectedFile || inspectedDoc) && (
                 <button
                   type="button"
                   onClick={handleReset}
@@ -350,7 +483,6 @@ export default function App() {
               )}
             </div>
 
-            {/* Dropzone */}
             <div
               onDragOver={(e) => {
                 e.preventDefault();
@@ -378,20 +510,20 @@ export default function App() {
               <div className="text-xs text-slate-500 mt-1">{t.dropzoneHint}</div>
             </div>
 
-            {/* Selected File Metadata (Unboxed) */}
             {selectedFile && detectedSource && (
               <div className="pt-2 border-t border-slate-200 space-y-4">
                 <div className="space-y-1">
                   <div className="text-xs text-slate-500">{t.selectedFile}</div>
                   <div className="text-sm font-semibold text-slate-900 break-all">{selectedFile.name}</div>
                   <div className="flex items-center gap-2 text-xs text-slate-600 tabular-nums">
-                    <span>{t.detectedFormat}: {formatLabel(detectedSource)}</span>
+                    <span>
+                      {t.detectedFormat}: {formatLabel(detectedSource)}
+                    </span>
                     <span aria-hidden="true">·</span>
                     <span>{formatBytes(selectedFile.size)}</span>
                   </div>
                 </div>
 
-                {/* Target Format Segmented Control */}
                 <div className="space-y-2">
                   <div className="text-xs font-medium text-slate-700">{t.targetLabel}</div>
                   <div className="grid grid-cols-2 gap-2">
@@ -420,7 +552,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* PDF Layout Options when PDF is a valid target */}
                 {showPdfOptions && (
                   <div className="space-y-2 pt-1">
                     <div className="text-xs font-medium text-slate-700">{t.pdfSettingsLabel}</div>
@@ -451,7 +582,6 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Primary Inspect & Convert Button */}
                 <button
                   type="button"
                   disabled={isInspecting || exportingTarget !== null}
@@ -464,12 +594,35 @@ export default function App() {
               </div>
             )}
 
-            {/* Direct Downloads once inspected */}
             {inspectedDoc && validTargets.length > 0 && (
               <div className="pt-4 border-t border-slate-200 space-y-2.5">
                 <div className="text-xs font-semibold text-slate-700">{t.downloadReadyTitle}</div>
-                {statusMessage && (
-                  <p className="text-xs text-emerald-700">{statusMessage}</p>
+                {statusMessage && <p className="text-xs text-emerald-700">{statusMessage}</p>}
+                {showPdfOptions && !selectedFile && (
+                  <div className="grid grid-cols-2 gap-2 pb-1">
+                    <button
+                      type="button"
+                      onClick={() => setPdfOptions((o) => ({ ...o, orientation: 'portrait' }))}
+                      className={`px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap cursor-pointer ${
+                        pdfOptions.orientation === 'portrait'
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {t.portrait}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPdfOptions((o) => ({ ...o, orientation: 'landscape' }))}
+                      className={`px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap cursor-pointer ${
+                        pdfOptions.orientation === 'landscape'
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {t.landscape}
+                    </button>
+                  </div>
                 )}
                 <div className="space-y-2">
                   {validTargets.map((fmt) => {
@@ -508,6 +661,22 @@ export default function App() {
             />
           </section>
         </div>
+
+        {/* Firebase Authentication & Saved Conversion History */}
+        <SavedHistoryPanel
+          lang={lang}
+          user={user}
+          authReady={authReady}
+          records={savedRecords}
+          activeRecordId={activeRecordId}
+          isSaving={isSavingToFirebase}
+          hasCurrentDoc={inspectedDoc !== null}
+          onSignIn={handleGoogleSignIn}
+          onSignOut={handleSignOut}
+          onSaveCurrent={handleSaveCurrentToFirebase}
+          onSelectRecord={handleSelectSavedRecord}
+          onDeleteRecord={handleDeleteSavedRecord}
+        />
 
         {/* Supported Format Matrix & Sample Loaders */}
         <FormatMatrixSection lang={lang} onLoadSample={handleLoadSample} />

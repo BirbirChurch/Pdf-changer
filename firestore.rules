@@ -1,0 +1,140 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable hardened primitives
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'preferredLang', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'preferredLang', 'createdAt', 'updatedAt'])
+        && data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.uid.size() >= 1
+        && data.uid.size() <= 128
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120))
+        && data.preferredLang in ['am', 'en']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSavedConversion(data, userId, conversionId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'title', 'fileName', 'sourceFormat',
+          'fileSizeBytes', 'detectedScript', 'ethiopicCharCount',
+          'latinCharCount', 'pageOrSheetCount', 'inspectionMethod',
+          'inspectionNotes', 'blocks', 'sheets', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'title', 'fileName', 'sourceFormat',
+          'fileSizeBytes', 'detectedScript', 'ethiopicCharCount',
+          'latinCharCount', 'pageOrSheetCount', 'inspectionMethod',
+          'inspectionNotes', 'blocks', 'sheets', 'createdAt', 'updatedAt'
+        ])
+        && data.id is string
+        && data.id == conversionId
+        && data.id.size() >= 1
+        && data.id.size() <= 128
+        && data.ownerId is string
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.ownerId.size() >= 1
+        && data.ownerId.size() <= 128
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 300
+        && data.fileName is string
+        && data.fileName.size() >= 1
+        && data.fileName.size() <= 255
+        && data.sourceFormat in ['pdf', 'docx', 'xlsx']
+        && data.fileSizeBytes is int
+        && data.fileSizeBytes >= 0
+        && data.fileSizeBytes <= 26214400
+        && data.detectedScript in ['amharic', 'english', 'bilingual', 'other']
+        && data.ethiopicCharCount is int
+        && data.ethiopicCharCount >= 0
+        && data.latinCharCount is int
+        && data.latinCharCount >= 0
+        && data.pageOrSheetCount is int
+        && data.pageOrSheetCount >= 1
+        && data.inspectionMethod in ['gemini-vision-ocr', 'structured-xml', 'spreadsheet-engine']
+        && data.inspectionNotes is list
+        && data.inspectionNotes.size() <= 10
+        && (data.inspectionNotes.size() == 0 || data.inspectionNotes[0] is string)
+        && data.blocks is list
+        && data.blocks.size() <= 400
+        && (data.blocks.size() == 0 || data.blocks[0] is map)
+        && data.sheets is list
+        && data.sheets.size() <= 30
+        && (data.sheets.size() == 0 || data.sheets[0] is map)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredLang', 'updatedAt']);
+      allow delete: if false;
+
+      match /conversions/{conversionId} {
+        allow get: if isValidId(userId) && isValidId(conversionId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(conversionId)
+          && isOwner(userId)
+          && isValidSavedConversion(incoming(), userId, conversionId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(conversionId)
+          && isOwner(userId)
+          && isValidSavedConversion(incoming(), userId, conversionId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'detectedScript', 'ethiopicCharCount', 'latinCharCount',
+            'blocks', 'sheets', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(conversionId) && isOwner(userId);
+      }
+    }
+  }
+}

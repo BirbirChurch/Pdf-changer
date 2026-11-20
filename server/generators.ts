@@ -81,12 +81,13 @@ export async function generateDocxBuffer(model: DocumentModel): Promise<Buffer> 
     );
   }
 
-  const blocks = model.blocks.length > 0
-    ? model.blocks
-    : model.sheets.flatMap((s, idx) => [
-        { id: `sh_h_${idx}`, type: 'heading' as const, level: 2 as const, text: s.name },
-        { id: `sh_t_${idx}`, type: 'table' as const, title: s.name, headers: s.headers, rows: s.rows },
-      ]);
+  const blocks =
+    model.blocks.length > 0
+      ? model.blocks
+      : model.sheets.flatMap((s, idx) => [
+          { id: `sh_h_${idx}`, type: 'heading' as const, level: 2 as const, text: s.name },
+          { id: `sh_t_${idx}`, type: 'table' as const, title: s.name, headers: s.headers, rows: s.rows },
+        ]);
 
   for (const block of blocks) {
     if (block.type === 'heading') {
@@ -137,7 +138,6 @@ export async function generateDocxBuffer(model: DocumentModel): Promise<Buffer> 
 
       const tableRows: TableRow[] = [];
 
-      // Header row
       tableRows.push(
         new TableRow({
           tableHeader: true,
@@ -157,7 +157,6 @@ export async function generateDocxBuffer(model: DocumentModel): Promise<Buffer> 
         })
       );
 
-      // Data rows
       norm.rows.forEach((row, rIdx) => {
         const fill = rIdx % 2 === 1 ? 'F8FAFC' : 'FFFFFF';
         tableRows.push(
@@ -223,12 +222,13 @@ export async function generateXlsxBuffer(model: DocumentModel): Promise<Buffer> 
   workbook.created = new Date();
 
   const usedNames = new Set<string>();
-  const rawSheets = model.sheets.length > 0
-    ? model.sheets
-    : [{ name: 'Document_Content', headers: ['Content'], rows: [[model.title || '']] }];
+  const rawSheets =
+    model.sheets.length > 0
+      ? model.sheets
+      : [{ name: 'Document_Content', headers: ['Content'], rows: [[model.title || '']] }];
 
   rawSheets.forEach((sheet, idx) => {
-    let baseName = sanitizeSheetName(sheet.name, idx);
+    const baseName = sanitizeSheetName(sheet.name, idx);
     let uniqueName = baseName;
     let counter = 2;
     while (usedNames.has(uniqueName.toLowerCase())) {
@@ -271,7 +271,6 @@ export async function generateXlsxBuffer(model: DocumentModel): Promise<Buffer> 
       });
     });
 
-    // Intelligent column widths accommodating Amharic & English text
     norm.headers.forEach((header, colIdx) => {
       let maxLen = header.length;
       for (const row of norm.rows) {
@@ -366,7 +365,8 @@ export async function generatePdfBuffer(
         if (idx === 0) {
           doc.text(run.text, x, y, { width, align, lineGap, continued: !isLast });
         } else {
-          doc.text(run.text, { width, align, lineGap, continued: !isLast });
+          // Only pass continued on subsequent runs so PDFKit maintains exact line wrap width and spaces
+          doc.text(run.text, { continued: !isLast });
         }
       });
 
@@ -380,11 +380,10 @@ export async function generatePdfBuffer(
       }
     };
 
-    // Title Banner
     if (model.title) {
-      const titleH = measureBilingualHeight(model.title, pageWidth, 19, true, 4);
+      const titleH = measureBilingualHeight(model.title, pageWidth, 18, true, 4);
       ensureSpace(titleH + 18);
-      const endY = drawBilingualText(model.title, startX, doc.y, pageWidth, 19, {
+      const endY = drawBilingualText(model.title, startX, doc.y, pageWidth, 18, {
         bold: true,
         color: '#0F172A',
         lineGap: 4,
@@ -398,16 +397,17 @@ export async function generatePdfBuffer(
       doc.y = endY + 16;
     }
 
-    const blocks = model.blocks.length > 0
-      ? model.blocks
-      : model.sheets.flatMap((s, idx) => [
-          { id: `sh_h_${idx}`, type: 'heading' as const, level: 2 as const, text: s.name },
-          { id: `sh_t_${idx}`, type: 'table' as const, title: s.name, headers: s.headers, rows: s.rows },
-        ]);
+    const blocks =
+      model.blocks.length > 0
+        ? model.blocks
+        : model.sheets.flatMap((s, idx) => [
+            { id: `sh_h_${idx}`, type: 'heading' as const, level: 2 as const, text: s.name },
+            { id: `sh_t_${idx}`, type: 'table' as const, title: s.name, headers: s.headers, rows: s.rows },
+          ]);
 
     for (const block of blocks) {
       if (block.type === 'heading') {
-        const fontSize = block.level === 1 ? 15 : block.level === 2 ? 13 : 11.5;
+        const fontSize = block.level === 1 ? 14.5 : block.level === 2 ? 12.5 : 11.5;
         const h = measureBilingualHeight(block.text, pageWidth, fontSize, true, 3);
         ensureSpace(h + 16);
         doc.y += 6;
@@ -453,7 +453,6 @@ export async function generatePdfBuffer(
         const norm = normalizeTableGrid(block.headers, block.rows);
         const colCount = Math.max(norm.headers.length, 1);
 
-        // Proportional column widths based on max text length in each column
         const colWeights = norm.headers.map((h, cIdx) => {
           let maxL = Math.max(h.length, 4);
           for (const row of norm.rows.slice(0, 40)) {
@@ -462,8 +461,7 @@ export async function generatePdfBuffer(
           return Math.min(maxL, 42);
         });
         const totalWeight = colWeights.reduce((a, b) => a + b, 0) || colCount;
-        const colWidths = colWeights.map((w) => Math.max((w / totalWeight) * pageWidth, 38));
-        // Rescale to fit exact pageWidth
+        const colWidths = colWeights.map((w) => Math.max((w / totalWeight) * pageWidth, 34));
         const sumW = colWidths.reduce((a, b) => a + b, 0);
         const scaledWidths = colWidths.map((w) => (w / sumW) * pageWidth);
 
@@ -472,7 +470,7 @@ export async function generatePdfBuffer(
         const cellFontSize = colCount > 7 ? 8.5 : 9.5;
 
         const measureRowHeight = (cells: string[], bold = false): number => {
-          let maxH = 18;
+          let maxH = 20;
           cells.forEach((cellText, cIdx) => {
             const availW = Math.max(scaledWidths[cIdx] - padX * 2, 16);
             const h = measureBilingualHeight(cellText || ' ', availW, cellFontSize, bold, 2);
@@ -537,11 +535,13 @@ export async function generatePdfBuffer(
       }
     }
 
-    // Add clean page numbers in footer
+    // Add page numbers safely without triggering extra blank pages
     const range = doc.bufferedPageRange();
     for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
-      const footerY = doc.page.height - 34;
+      const prevBottomMargin = doc.page.margins.bottom;
+      doc.page.margins.bottom = 0;
+      const footerY = doc.page.height - 32;
       doc
         .font('Latin')
         .fontSize(8.5)
@@ -549,7 +549,9 @@ export async function generatePdfBuffer(
         .text(`Page ${i + 1} of ${range.count}`, startX, footerY, {
           width: pageWidth,
           align: 'right',
+          lineBreak: false,
         });
+      doc.page.margins.bottom = prevBottomMargin;
     }
 
     doc.end();

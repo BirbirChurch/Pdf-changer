@@ -1,0 +1,148 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile metadata.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name.",
+          "maxLength": 120
+        },
+        "preferredLang": {
+          "type": "string",
+          "enum": ["am", "en"],
+          "description": "Preferred UI language."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["uid", "preferredLang", "createdAt", "updatedAt"]
+    },
+    "SavedConversion": {
+      "title": "SavedConversion",
+      "description": "Inspected and convertible bilingual Amharic/English document saved by the user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique conversion document ID.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "description": "Document title.",
+          "maxLength": 300
+        },
+        "fileName": {
+          "type": "string",
+          "description": "Original uploaded file name.",
+          "maxLength": 255
+        },
+        "sourceFormat": {
+          "type": "string",
+          "enum": ["pdf", "docx", "xlsx"],
+          "description": "Original source format."
+        },
+        "fileSizeBytes": {
+          "type": "integer",
+          "description": "Source file size in bytes."
+        },
+        "detectedScript": {
+          "type": "string",
+          "enum": ["amharic", "english", "bilingual", "other"],
+          "description": "Detected script mix."
+        },
+        "ethiopicCharCount": {
+          "type": "integer",
+          "description": "Count of Ethiopic Ge'ez characters."
+        },
+        "latinCharCount": {
+          "type": "integer",
+          "description": "Count of Latin characters."
+        },
+        "pageOrSheetCount": {
+          "type": "integer",
+          "description": "Number of pages or sheets."
+        },
+        "inspectionMethod": {
+          "type": "string",
+          "enum": ["gemini-vision-ocr", "structured-xml", "spreadsheet-engine"],
+          "description": "Inspection method used."
+        },
+        "inspectionNotes": {
+          "type": "array",
+          "description": "Factual inspection notes (max 10)."
+        },
+        "blocks": {
+          "type": "array",
+          "description": "Structured document blocks (headings, paragraphs, lists, tables)."
+        },
+        "sheets": {
+          "type": "array",
+          "description": "Structured worksheet tables."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "title",
+        "fileName",
+        "sourceFormat",
+        "fileSizeBytes",
+        "detectedScript",
+        "ethiopicCharCount",
+        "latinCharCount",
+        "pageOrSheetCount",
+        "inspectionMethod",
+        "inspectionNotes",
+        "blocks",
+        "sheets",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile preferences owned by userId."
+    },
+    "/users/{userId}/conversions/{conversionId}": {
+      "schema": { "$ref": "#/entities/SavedConversion" },
+      "description": "User-owned bilingual document inspections and conversions."
+    }
+  }
+}
